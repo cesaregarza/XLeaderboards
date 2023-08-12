@@ -1,0 +1,57 @@
+[tool.poetry]
+name = "xleaderboards"
+version = "0.1.0"
+description = ""
+authors = ["Cesar E Garza <cesar@cegarza.com>"]
+license = "GPL-3.0-or-later"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+splatnet3-scraper = "^0.9.5"
+requests = "^2.31.0"
+pyarrow = "^12.0.1"
+pandas = "^2.0.3"
+sqlalchemy = "^2.0.19"
+psycopg2-binary = "^2.9.7"
+python-dotenv = "^1.0.0"
+
+
+[tool.poetry.group.dev.dependencies]
+black = "^23.7.0"
+isort = "^5.12.0"
+flake8 = "^6.1.0"
+darglint = "^1.8.1"
+pytest = "^7.4.0"
+ipykernel = "^6.25.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 80
+target-version = ['py311']
+
+[tool.isort]
+profile = "black"
+line_length = 80
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+pretty = true
+exclude = [".venv", "tests", "docs", "examples"]
+
+[tool.pytest.ini_options]
+testpaths = "tests"
+addopts = [
+    "-v",
+    "--tb=auto",
+    "--showlocals",
+    "--color=yes",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "internet: marks tests as requiring internet access (deselect with '-m \"not internet\"')",
+]

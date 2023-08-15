@@ -1,5 +1,9 @@
 import base64
 import datetime as dt
+import glob
+import json
+import os
+import pathlib
 from typing import Any
 
 import pytz
@@ -10,7 +14,6 @@ from sqlalchemy.dialects import postgresql as sql
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
-from x_scraper.sql import Base
 from x_scraper.sql import Player as PlayerTable
 from x_scraper.sql import Schedule as ScheduleTable
 from x_scraper.types import Mode, ModeName, Player, Region, RegionName, Schedule
@@ -116,6 +119,44 @@ class Connector:
             PlayerTable.__table__.create(self.session.bind)
 
 
+class S3InkReader:
+    def __init__(self, glob_path: str):
+        self.glob_path = glob_path
+
+    def parse_player_path(self, path: str) -> tuple[dt.datetime, str, str]:
+        filename = pathlib.Path(path).name
+        parts = filename.split(".")
+        date, time, _, _, region, rule, _ = parts
+        datetime = dt.datetime.strptime(f"{date} {time}", "%Y-%m-%d %H-%M-%S")
+        return datetime, region, rule, path
+
+    def get_player_paths(self) -> list[tuple[dt.datetime, str, str, str]]:
+        paths = glob.glob(self.glob_path)
+        paths = [self.parse_player_path(path) for path in paths]
+        paths = sorted(paths, key=lambda x: x[0])
+        return paths
+
+    def read_player_path(path: str) -> QueryResponse:
+        with open(path, "r") as f:
+            return QueryResponse(json.load(f))
+
+    def read_player_paths(self) -> list[QueryResponse]:
+        return [self.read_player_path(path) for path in self.get_player_paths()]
+
+    def read_schedule_path(self, path: str) -> QueryResponse:
+        with open(path, "r") as f:
+            return QueryResponse(json.load(f)["data"])
+
+    def read_schedule_paths(self, glob_path: str) -> list[QueryResponse]:
+        out = []
+        for path in glob.glob(glob_path):
+            try:
+                out.append(self.read_schedule_path(path))
+            except json.decoder.JSONDecodeError:
+                pass
+        return out
+
+
 class XRankScraper:
     query = "XRankingQuery"
     schedule_query = "StageScheduleQuery"
@@ -145,6 +186,24 @@ class XRankScraper:
     def __init__(self, scraper: QueryHandler, connector: Connector):
         self.scraper = scraper
         self.connector = connector
+        utc_tz = pytz.timezone("UTC")
+        timestamp = dt.datetime.utcnow()
+        self.timestamp = utc_tz.localize(timestamp)
+
+    @staticmethod
+    def from_env() -> "XRankScraper":
+        scraper = QueryHandler.from_config_file()
+        connection_dict = {
+            "host": os.environ["DB_HOST"],
+            "port": os.environ["DB_PORT"],
+            "user": os.environ["DB_USER"],
+            "password": os.environ["DB_PASSWORD"],
+            "database": os.environ["DB_DATABASE"],
+        }
+        connector = Connector.from_dict(connection_dict)
+        return XRankScraper(scraper, connector)
+
+    def update_timestamp(self) -> None:
         utc_tz = pytz.timezone("UTC")
         timestamp = dt.datetime.utcnow()
         self.timestamp = utc_tz.localize(timestamp)
@@ -249,8 +308,11 @@ class XRankScraper:
         timestamp = dt.datetime.strptime(time, "%Y-%m-%dT%H:%M:%SZ")
         return utc_tz.localize(timestamp)
 
-    def get_schedule(self) -> list[Schedule]:
-        response = self.scraper.query(self.schedule_query)
+    def get_schedule(
+        self, response: QueryResponse | None = None
+    ) -> list[Schedule]:
+        if response is None:
+            response = self.scraper.query(self.schedule_query)
         responses = response[self.schedule_path]
         schedule = []
         for response in responses:
@@ -273,8 +335,8 @@ class XRankScraper:
             schedule.append(base)
         return schedule
 
-    def update_schedule_db(self) -> None:
-        schedule = self.get_schedule()
+    def update_schedule_db(self, response: QueryResponse | None = None) -> None:
+        schedule = self.get_schedule(response=response)
         self.connector.ensure_schedule_table_exists()
         self.connector.insert_schedules(schedule)
 
@@ -293,6 +355,7 @@ class XRankScraper:
         return [current_mode]
 
     def update_player_db(self) -> None:
+        self.update_timestamp()
         players = []
         self.connector.ensure_player_table_exists()
         for schedule in self.calculate_modes_to_update(self.timestamp):
